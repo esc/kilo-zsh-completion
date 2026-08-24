@@ -1,0 +1,983 @@
+#compdef kilo
+# -----------------------------------------------------------------------------
+# Native zsh completion for the `kilo` CLI (https://kilo.ai).
+#
+# Hand-written against the CLI reference at:
+#   https://kilo.ai/docs/code-with-ai/platforms/cli-reference
+# Regenerate/diff against `kilo help --all --format md` when the CLI changes.
+#
+# Dynamic values (models, agents, session ids) are looked up by running kilo
+# and cached under ${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion. Tune with:
+#   zstyle ':completion:*:*:kilo:*' cache-ttl 3600   # seconds, default 3600
+#   zstyle ':completion:*:*:kilo:*' dynamic false    # disable dynamic lookups
+# -----------------------------------------------------------------------------
+
+# ---- cache helpers ----------------------------------------------------------
+
+_kilo_cache_dir() {
+  print -r -- "${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion"
+}
+
+_kilo_cache_ttl() {
+  local ttl
+  zstyle -s ':completion:*:*:kilo:*' cache-ttl ttl
+  print -r -- "${ttl:-3600}"
+}
+
+_kilo_dynamic_enabled() {
+  local dyn
+  zstyle -s ':completion:*:*:kilo:*' dynamic dyn
+  [[ -z $dyn || $dyn == true ]]
+}
+
+# _kilo_cached <cache-file-name> <command...>
+# Prints cached output for <command...>, refreshing it synchronously
+# (guarded by `timeout` when available) if the cache is missing or stale.
+# Falls back to a stale cache on failure, and to nothing if there is none.
+_kilo_cached() {
+  local name=$1
+  shift
+  local dir="$(_kilo_cache_dir)"
+  local file="$dir/$name"
+  local ttl="$(_kilo_cache_ttl)"
+  local fresh=0
+
+  if [[ -f $file ]]; then
+    (( $+builtins[zstat] )) || zmodload zsh/stat 2>/dev/null
+    (( $+parameters[EPOCHSECONDS] )) || zmodload zsh/datetime 2>/dev/null
+    local -a mtime
+    local age=0
+    if (( $+builtins[zstat] )); then
+      zstat -A mtime +mtime -- "$file" 2>/dev/null
+      age=$(( EPOCHSECONDS - ${mtime[1]:-0} ))
+    fi
+    (( age < ttl )) && fresh=1
+  fi
+
+  if (( ! fresh )) && _kilo_dynamic_enabled; then
+    [[ -d $dir ]] || command mkdir -p -- "$dir" 2>/dev/null
+    local out tmp="${file}.tmp.$$"
+    if (( $+commands[timeout] )); then
+      out="$(timeout 5 "$@" 2>/dev/null)"
+    else
+      out="$("$@" 2>/dev/null)"
+    fi
+    if [[ -n $out ]]; then
+      print -r -- "$out" >| "$tmp" 2>/dev/null && command mv -f -- "$tmp" "$file" 2>/dev/null
+    fi
+  fi
+
+  [[ -f $file ]] && cat -- "$file"
+}
+
+# ---- dynamic value sources ---------------------------------------------------
+
+_kilo_model_list() {
+  local raw
+  raw="$(_kilo_cached models kilo models)"
+  [[ -n $raw ]] || return 1
+  print -r -- "$raw" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.:-]+'
+}
+
+_kilo_models() {
+  local -a models
+  models=(${(f)"$(_kilo_model_list)"})
+  if (( ${#models} )); then
+    _describe -t kilo-models 'model (provider/model)' models
+  else
+    _message 'model (provider/model)'
+  fi
+}
+
+_kilo_providers() {
+  local -a models provider_raw providers
+  models=(${(f)"$(_kilo_model_list)"})
+  provider_raw=(${models%%/*})
+  providers=(${(u)provider_raw})
+  if (( ${#providers} )); then
+    _describe -t kilo-providers 'provider' providers
+  else
+    _message 'provider id'
+  fi
+}
+
+_kilo_agent_list() {
+  local raw
+  raw="$(_kilo_cached agents kilo agent list)"
+  [[ -n $raw ]] || return 1
+  print -r -- "$raw" | awk 'NF && $1 !~ /^(NAME|Agent|---)/ {print $1}'
+}
+
+_kilo_agents() {
+  local -a agents
+  agents=(${(f)"$(_kilo_agent_list)"})
+  if (( ${#agents} )); then
+    _describe -t kilo-agents 'agent' agents
+  else
+    _message 'agent name'
+  fi
+}
+
+_kilo_session_pairs() {
+  local raw
+  # Note: `--all --format json` currently crashes in kilo (7.4.23) with
+  # "undefined is not an object (evaluating 'L.time.updated')"; omit --all.
+  raw="$(_kilo_cached sessions kilo session list --format json)"
+  [[ -n $raw ]] || return 1
+  if (( $+commands[jq] )); then
+    print -r -- "$raw" | jq -r '.[] | "\(.id):\(.title // .id)"' 2>/dev/null
+  else
+    print -r -- "$raw" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      | sed -E 's/.*"([^"]*)"$/\1:\1/'
+  fi
+}
+
+_kilo_sessions() {
+  local -a pairs
+  pairs=(${(f)"$(_kilo_session_pairs)"})
+  if (( ${#pairs} )); then
+    _describe -t kilo-sessions 'session' pairs
+  else
+    _message 'session id'
+  fi
+}
+
+# ---- top-level command list --------------------------------------------------
+
+_kilo_commands() {
+  local -a commands
+  commands=(
+    'acp:start ACP (Agent Client Protocol) server'
+    'mcp:manage MCP (Model Context Protocol) servers'
+    'attach:attach to a running kilo server'
+    'run:run kilo with a message'
+    'debug:debugging and troubleshooting tools'
+    'auth:manage AI providers and credentials'
+    'agent:manage agents'
+    'upgrade:upgrade kilo to the latest or a specific version'
+    'uninstall:uninstall kilo and remove all related files'
+    'serve:start a headless kilo server'
+    'models:list all available models'
+    'roll-call:batch-test text models matching a filter'
+    'profile:show Kilo account profile'
+    'stats:show token usage and cost statistics'
+    'export:export session data as JSON'
+    'import:import session data from JSON file or URL'
+    'github:manage GitHub agent'
+    'pr:manage pull requests'
+    'session:manage sessions'
+    'remote:enable remote connection for real-time session relay'
+    'daemon:manage the local kilo daemon'
+    'console:open or stop the local Kilo Console (deprecated)'
+    'cloud:run Cloud Agent tasks'
+    'db:database tools'
+    'config:configuration tools'
+    'plugin:install plugin and update config'
+    'help:show full CLI reference'
+    'completion:generate shell completion script'
+  )
+  _describe -t kilo-commands 'kilo command' commands
+}
+
+# ---- per-command completions --------------------------------------------------
+
+_kilo_acp() {
+  _arguments \
+    $_kilo_hv \
+    $_kilo_server_opts \
+    '--cwd[working directory]:directory:_files -/'
+}
+
+_kilo_serve() {
+  _arguments \
+    $_kilo_hv \
+    $_kilo_server_opts
+}
+
+_kilo_attach() {
+  _arguments \
+    $_kilo_hv \
+    '--dir[directory to run in]:directory:_files -/' \
+    '(-c --continue)'{-c,--continue}'[continue the last session]' \
+    '(-s --session)'{-s,--session}'[session id to continue]:session:_kilo_sessions' \
+    '--fork[fork the session when continuing]' \
+    '--cloud-fork[fetch session from cloud, continue locally]' \
+    '(-p --password)'{-p,--password}'[basic auth password]:password:' \
+    '(-u --username)'{-u,--username}'[basic auth username]:username:' \
+    '--mini[start the minimal interactive interface]' \
+    '--no-replay[disable mini session history replay]' \
+    '--replay-limit[cap visible mini replay to newest N messages]:count:' \
+    ':server url:(http://localhost:4096)'
+}
+
+_kilo_run() {
+  _arguments \
+    $_kilo_hv \
+    '--command[the command to run, use message for args]:command:' \
+    '(-c --continue)'{-c,--continue}'[continue the last session]' \
+    '(-s --session)'{-s,--session}'[session id to continue]:session:_kilo_sessions' \
+    '--fork[fork the session before continuing]' \
+    '--cloud-fork[fetch session from cloud, continue locally]' \
+    '--share[share the session]' \
+    '(-m --model)'{-m,--model}'[model to use (provider/model)]:model:_kilo_models' \
+    '--agent[agent to use]:agent:_kilo_agents' \
+    '--format[output format]:format:(default json)' \
+    '*'{-f,--file}'[file(s) to attach to message]:file:_files' \
+    '--title[title for the session]:title:' \
+    '--attach[attach to a running kilo server]:url:' \
+    '(-p --password)'{-p,--password}'[basic auth password]:password:' \
+    '(-u --username)'{-u,--username}'[basic auth username]:username:' \
+    '--dir[directory to run in]:directory:_files -/' \
+    '--port[port for the local server]:port:' \
+    '--variant[model variant]:variant:' \
+    '--thinking[show thinking blocks]' \
+    '(-i --interactive)'{-i,--interactive}'[run in direct interactive split-footer mode]' \
+    '--auto[auto-approve permissions that are not explicitly denied (dangerous!)]' \
+    '*:message:'
+}
+
+_kilo_upgrade() {
+  _arguments \
+    $_kilo_hv \
+    '(-m --method)'{-m,--method}'[installation method to use]:method:(curl npm yarn pnpm bun brew choco scoop)' \
+    ':target version (e.g. 0.1.48):'
+}
+
+_kilo_uninstall() {
+  _arguments \
+    $_kilo_hv \
+    '(-c --keep-config)'{-c,--keep-config}'[keep configuration files]' \
+    '(-d --keep-data)'{-d,--keep-data}'[keep session data and snapshots]' \
+    '--dry-run[show what would be removed without removing]' \
+    '(-f --force)'{-f,--force}'[skip confirmation prompts]'
+}
+
+_kilo_models_cmd() {
+  _arguments \
+    $_kilo_hv \
+    '--verbose[use more verbose model output]' \
+    '--refresh[refresh the models cache from models.dev]' \
+    ':provider id:_kilo_providers'
+}
+
+_kilo_roll_call() {
+  _arguments \
+    $_kilo_hv \
+    '--prompt[prompt to send to each model]:prompt:' \
+    '--timeout[timeout for each model call in ms]:milliseconds:' \
+    '--parallel[number of parallel model calls]:count:' \
+    '--verbose[show verbose output]' \
+    '--quiet[suppress progress and decoration]' \
+    '--output[output format]:format:(table json md)' \
+    ':filter (regex over provider/modelID):'
+}
+
+_kilo_profile() {
+  _arguments \
+    $_kilo_hv \
+    '--json[output profile as JSON]'
+}
+
+_kilo_stats() {
+  _arguments \
+    $_kilo_hv \
+    '--days[show stats for the last N days]:days:' \
+    '--tools[number of tools to show]:count:' \
+    '--models[show model statistics; optionally pass top N]:top N (optional):' \
+    '--project[filter by project]:project:_files -/'
+}
+
+_kilo_export() {
+  _arguments \
+    $_kilo_hv \
+    '--sanitize[redact sensitive transcript and file data]' \
+    ':session id:_kilo_sessions'
+}
+
+_kilo_import() {
+  _arguments \
+    $_kilo_hv \
+    ':file or share URL:_files'
+}
+
+_kilo_plugin() {
+  _arguments \
+    $_kilo_hv \
+    '(-g --global)'{-g,--global}'[install in global config]' \
+    '(-f --force)'{-f,--force}'[replace existing plugin version]' \
+    ':npm module name:'
+}
+
+_kilo_help() {
+  _arguments \
+    $_kilo_hv \
+    '--all[show help for all commands]' \
+    '--format[output format]:format:(md text)' \
+    ':command:_kilo_commands'
+}
+
+_kilo_completion() {
+  _arguments $_kilo_hv
+}
+
+_kilo_remote() {
+  _arguments $_kilo_hv
+}
+
+# ---- mcp ---------------------------------------------------------------------
+
+_kilo_mcp() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'add:add an MCP server'
+        'list:list MCP servers and their status'
+        'auth:authenticate with an OAuth-enabled MCP server'
+        'logout:remove OAuth credentials for an MCP server'
+        'debug:debug OAuth connection for an MCP server'
+      )
+      _describe -t kilo-mcp-commands 'mcp command' cmds
+      ;;
+    args)
+      case $line[1] in
+        add)
+          _arguments \
+            $_kilo_hv \
+            '--url[URL for a remote MCP server]:url:' \
+            '*--env[environment variable KEY=VALUE]:env:' \
+            '*--header[HTTP header KEY=VALUE]:header:' \
+            ':mcp server name:'
+          ;;
+        list)
+          _arguments $_kilo_hv
+          ;;
+        auth)
+          _arguments \
+            $_kilo_hv \
+            ':subcommand "list", or mcp server name:_kilo_mcp_auth_positional'
+          ;;
+        logout)
+          _arguments $_kilo_hv ':mcp server name:'
+          ;;
+        debug)
+          _arguments $_kilo_hv ':mcp server name:'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_kilo_mcp_auth_positional() {
+  _alternative \
+    'commands:mcp auth command:(list)' \
+    'names:mcp server name:_message "mcp server name"'
+}
+
+# ---- debug ---------------------------------------------------------------------
+
+_kilo_debug() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'config:show resolved configuration'
+        'lsp:LSP debugging utilities'
+        'rg:ripgrep debugging utilities'
+        'file:file system debugging utilities'
+        'scrap:list all known projects'
+        'skill:list all available skills'
+        'snapshot:snapshot debugging utilities'
+        'startup:print startup timing'
+        'agent:show agent configuration details'
+        'v2:debug v2 catalog and built-in plugins'
+        'info:show debug information'
+        'paths:show global paths (data, config, cache, state)'
+        'wait:wait indefinitely (for debugging)'
+      )
+      _describe -t kilo-debug-commands 'debug command' cmds
+      ;;
+    args)
+      case $line[1] in
+        config|scrap|skill|startup|v2|info|paths|wait)
+          _arguments $_kilo_hv
+          ;;
+        lsp) _kilo_debug_lsp ;;
+        rg) _kilo_debug_rg ;;
+        file) _kilo_debug_file ;;
+        snapshot) _kilo_debug_snapshot ;;
+        agent)
+          _arguments \
+            $_kilo_hv \
+            '--tool[tool id to execute]:tool:' \
+            '--params[tool params as JSON or a JS object literal]:params:' \
+            ':agent name:_kilo_agents'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_kilo_debug_lsp() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'diagnostics:get diagnostics for a file'
+        'symbols:search workspace symbols'
+        'document-symbols:get symbols from a document'
+      )
+      _describe -t kilo-debug-lsp-commands 'debug lsp command' cmds
+      ;;
+    args)
+      case $line[1] in
+        diagnostics) _arguments $_kilo_hv ':file:_files' ;;
+        symbols) _arguments $_kilo_hv ':query:' ;;
+        document-symbols) _arguments $_kilo_hv ':document uri:' ;;
+      esac
+      ;;
+  esac
+}
+
+_kilo_debug_rg() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'files:list files using ripgrep'
+        'search:search file contents using ripgrep'
+      )
+      _describe -t kilo-debug-rg-commands 'debug rg command' cmds
+      ;;
+    args)
+      case $line[1] in
+        files)
+          _arguments \
+            $_kilo_hv \
+            '--query[filter files by query]:query:' \
+            '--glob[glob pattern to match files]:glob:' \
+            '--limit[limit number of results]:limit:'
+          ;;
+        search)
+          _arguments \
+            $_kilo_hv \
+            '*--glob[file glob pattern]:glob:' \
+            '--limit[limit number of results]:limit:' \
+            ':search pattern:'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_kilo_debug_file() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'read:read file contents as JSON'
+        'list:list files in a directory'
+        'search:search files by query'
+      )
+      _describe -t kilo-debug-file-commands 'debug file command' cmds
+      ;;
+    args)
+      case $line[1] in
+        read) _arguments $_kilo_hv ':file path:_files' ;;
+        list) _arguments $_kilo_hv ':directory path:_files -/' ;;
+        search) _arguments $_kilo_hv ':search query:' ;;
+      esac
+      ;;
+  esac
+}
+
+_kilo_debug_snapshot() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'track:track current snapshot state'
+        'patch:show patch for a snapshot hash'
+        'diff:show diff for a snapshot hash'
+      )
+      _describe -t kilo-debug-snapshot-commands 'debug snapshot command' cmds
+      ;;
+    args)
+      case $line[1] in
+        track) _arguments $_kilo_hv ;;
+        patch) _arguments $_kilo_hv ':snapshot hash:' ;;
+        diff) _arguments $_kilo_hv ':snapshot hash:' ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- auth ---------------------------------------------------------------------
+
+_kilo_auth() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'list:list providers and credentials'
+        'login:log in to a provider'
+        'logout:log out from a configured provider'
+      )
+      _describe -t kilo-auth-commands 'auth command' cmds
+      ;;
+    args)
+      case $line[1] in
+        list) _arguments $_kilo_hv ;;
+        login)
+          _arguments \
+            $_kilo_hv \
+            '(-p --provider)'{-p,--provider}'[provider id or name to log in to]:provider:_kilo_providers' \
+            '(-m --method)'{-m,--method}'[login method label]:method:' \
+            ':kilo auth provider url:'
+          ;;
+        logout)
+          _arguments $_kilo_hv ':provider:_kilo_providers'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- agent ---------------------------------------------------------------------
+
+_kilo_agent() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'create:create a new agent'
+        'list:list all available agents'
+      )
+      _describe -t kilo-agent-commands 'agent command' cmds
+      ;;
+    args)
+      case $line[1] in
+        create)
+          _arguments \
+            $_kilo_hv \
+            '--path[directory path to generate the agent file]:directory:_files -/' \
+            '--description[what the agent should do]:description:' \
+            '--mode[agent mode]:mode:(all primary subagent)' \
+            '(--permissions --tools)'{--permissions,--tools}'[comma-separated list of permissions to allow]:permissions:_values -s , "permission" bash read edit glob grep webfetch task todowrite websearch lsp skill' \
+            '(-m --model)'{-m,--model}'[model to use (provider/model)]:model:_kilo_models'
+          ;;
+        list) _arguments $_kilo_hv ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- github ---------------------------------------------------------------------
+
+_kilo_github() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'install:install the GitHub agent'
+        'run:run the GitHub agent'
+      )
+      _describe -t kilo-github-commands 'github command' cmds
+      ;;
+    args)
+      case $line[1] in
+        install) _arguments $_kilo_hv ;;
+        run)
+          _arguments \
+            $_kilo_hv \
+            '--event[GitHub mock event to run the agent for]:event:' \
+            '--token[GitHub personal access token]:token:'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- pr ---------------------------------------------------------------------
+
+_kilo_pr() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'checkout:fetch and checkout a GitHub PR branch, then run kilo'
+        'link:link the current worktree to a pull request'
+        'unlink:clear the linked pull request'
+        'status:show the linked pull request'
+      )
+      _describe -t kilo-pr-commands 'pr command' cmds
+      ;;
+    args)
+      case $line[1] in
+        checkout) _arguments $_kilo_hv ':PR number:' ;;
+        link) _arguments $_kilo_hv ':PR url:' ;;
+        unlink) _arguments $_kilo_hv ;;
+        status) _arguments $_kilo_hv ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- session ---------------------------------------------------------------------
+
+_kilo_session() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'list:list sessions'
+        'delete:delete a session'
+      )
+      _describe -t kilo-session-commands 'session command' cmds
+      ;;
+    args)
+      case $line[1] in
+        list)
+          _arguments \
+            $_kilo_hv \
+            '(-n --max-count)'{-n,--max-count}'[limit to N most recent sessions]:count:' \
+            '--format[output format]:format:(table json)' \
+            '(-a --all)'{-a,--all}'[list sessions from all projects]' \
+            '(-s --search)'{-s,--search}'[filter sessions by title]:title:'
+          ;;
+        delete)
+          _arguments $_kilo_hv ':session id:_kilo_sessions'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- daemon / console (default command + subcommands) ------------------------
+
+_kilo_daemon() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    $_kilo_server_opts \
+    '--json[print daemon details as JSON]' \
+    '(-f --foreground)'{-f,--foreground}'[keep the command active until interrupted]' \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'start:start the local kilo daemon'
+        'status:show local kilo daemon status'
+        'stop:stop the local kilo daemon'
+        'restart:restart the local kilo daemon'
+      )
+      _describe -t kilo-daemon-commands 'daemon command' cmds
+      ;;
+    args)
+      case $line[1] in
+        start|restart)
+          _arguments \
+            $_kilo_hv \
+            $_kilo_server_opts \
+            '--json[print daemon details as JSON]' \
+            '(-f --foreground)'{-f,--foreground}'[keep the command active until interrupted]'
+          ;;
+        status|stop)
+          _arguments $_kilo_hv '--json[print daemon details as JSON]'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_kilo_console() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    $_kilo_server_opts \
+    '(-f --foreground)'{-f,--foreground}'[keep the command active until interrupted]' \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=('stop:stop the local kilo daemon')
+      _describe -t kilo-console-commands 'console command' cmds
+      ;;
+    args)
+      case $line[1] in
+        stop) _arguments $_kilo_hv '--json[print daemon details as JSON]' ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- cloud ---------------------------------------------------------------------
+
+_kilo_cloud() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'start:start a Cloud Agent task'
+        'send:send a follow-up prompt to a Cloud Agent task'
+        'status:show Cloud Agent task status'
+        'result:show a Cloud Agent task result'
+      )
+      _describe -t kilo-cloud-commands 'cloud command' cmds
+      ;;
+    args)
+      case $line[1] in
+        start)
+          _arguments \
+            $_kilo_hv \
+            '--prompt[prompt for the Cloud Agent]:prompt:' \
+            '--repo[repository shorthand or URL]:repo:' \
+            '--repo-type[repository provider type]:type:(github gitlab git)' \
+            '--branch[repository branch]:branch:' \
+            '--model[Cloud Agent model]:model:_kilo_models' \
+            '--mode[Cloud Agent mode]:mode:' \
+            '--org-id[Kilo organization ID]:org id:' \
+            '--stream[connect to WebSocket stream and print events as JSONL]'
+          ;;
+        send)
+          _arguments \
+            $_kilo_hv \
+            '--session-id[Cloud Agent session ID]:session id:_kilo_sessions' \
+            '--prompt[follow-up prompt for the Cloud Agent]:prompt:'
+          ;;
+        status)
+          _arguments \
+            $_kilo_hv \
+            '--session-id[Cloud Agent session ID]:session id:_kilo_sessions' \
+            '--message-id[Cloud Agent message ID]:message id:'
+          ;;
+        result)
+          _arguments \
+            $_kilo_hv \
+            '--session-id[Cloud Agent session ID]:session id:_kilo_sessions' \
+            '--message-id[Cloud Agent message ID]:message id:'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- db ---------------------------------------------------------------------
+
+_kilo_db_positional() {
+  _alternative \
+    'commands:db command:(path)' \
+    'query:SQL query:_message "SQL query"'
+}
+
+_kilo_db() {
+  _arguments \
+    $_kilo_hv \
+    '--format[output format]:format:(json tsv)' \
+    ':subcommand "path", or a SQL query:_kilo_db_positional'
+}
+
+# ---- config ---------------------------------------------------------------------
+
+_kilo_config() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    $_kilo_hv \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=('check:check configuration for warnings and errors')
+      _describe -t kilo-config-commands 'config command' cmds
+      ;;
+    args)
+      case $line[1] in
+        check) _arguments $_kilo_hv ;;
+      esac
+      ;;
+  esac
+}
+
+# ---- main ---------------------------------------------------------------------
+
+local curcontext="$curcontext" state line
+typeset -A opt_args
+
+local -a _kilo_hv
+_kilo_hv=(
+  '(-h --help)'{-h,--help}'[show help]'
+  '(-v --version)'{-v,--version}'[show version]'
+)
+
+local -a _kilo_server_opts
+_kilo_server_opts=(
+  '--port[port to listen on]:port:'
+  '--hostname[hostname to listen on]:hostname:'
+  '--mdns[enable mDNS service discovery]'
+  '--mdns-domain[custom domain name for mDNS service]:domain:'
+  '*--cors[additional domain to allow for CORS]:domain:'
+)
+
+local -a _kilo_default_opts
+_kilo_default_opts=(
+  $_kilo_server_opts
+  '(-m --model)'{-m,--model}'[model to use (provider/model)]:model:_kilo_models'
+  '(-c --continue)'{-c,--continue}'[continue the last session]'
+  '(-s --session)'{-s,--session}'[session id to continue]:session:_kilo_sessions'
+  '--fork[fork the session when continuing]'
+  '--cloud-fork[fetch session from cloud, continue locally]'
+  '--worktree[create (or reuse) a git worktree with this name]:worktree name:'
+  '--prompt[prompt to use]:prompt:'
+  '--agent[agent to use]:agent:_kilo_agents'
+  '--auto[auto-approve permissions that are not explicitly denied (dangerous!)]'
+  '--mini[start the minimal interactive interface]'
+  '--no-replay[disable mini session history replay]'
+  '--replay-limit[cap visible mini replay to newest N messages]:count:'
+)
+
+_arguments -C \
+  $_kilo_hv \
+  '--print-logs[print logs to stderr]' \
+  '--log-level[log level]:level:(DEBUG INFO WARN ERROR)' \
+  $_kilo_default_opts \
+  '1: :->command_or_project' \
+  '*:: :->args' && return
+
+case $state in
+  command_or_project)
+    _alternative \
+      'commands:kilo command:_kilo_commands' \
+      'directories:project directory:_files -/'
+    ;;
+  args)
+    case $line[1] in
+      acp) _kilo_acp ;;
+      mcp) _kilo_mcp ;;
+      attach) _kilo_attach ;;
+      run) _kilo_run ;;
+      debug) _kilo_debug ;;
+      auth) _kilo_auth ;;
+      agent) _kilo_agent ;;
+      upgrade) _kilo_upgrade ;;
+      uninstall) _kilo_uninstall ;;
+      serve) _kilo_serve ;;
+      models) _kilo_models_cmd ;;
+      roll-call) _kilo_roll_call ;;
+      profile) _kilo_profile ;;
+      stats) _kilo_stats ;;
+      export) _kilo_export ;;
+      import) _kilo_import ;;
+      github) _kilo_github ;;
+      pr) _kilo_pr ;;
+      session) _kilo_session ;;
+      remote) _kilo_remote ;;
+      daemon) _kilo_daemon ;;
+      console) _kilo_console ;;
+      cloud) _kilo_cloud ;;
+      db) _kilo_db ;;
+      config) _kilo_config ;;
+      plugin) _kilo_plugin ;;
+      help) _kilo_help ;;
+      completion) _kilo_completion ;;
+      *)
+        # First word wasn't a known subcommand: treat as the default
+        # `kilo [project]` command and keep completing its own flags.
+        _arguments $_kilo_hv $_kilo_default_opts
+        ;;
+    esac
+    ;;
+esac
