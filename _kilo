@@ -4,8 +4,10 @@
 # ZSH Completion for kilo (https://kilo.ai)
 #
 # Author: Emergency Self-Construct
+# Assisted-by: Kilo (anthropic/claude-sonnet-5)
+# Assisted-by: Kilo (moonshotai/kimi-k3)
 # Licence: MIT (https://opensource.org/license/MIT)
-# Version: 0.1
+# Version: 0.2 (unreleased)
 # Homepage: https://github.com/esc/kilo-zsh-completion
 #
 # Hand-written against the CLI reference at:
