@@ -124,11 +124,28 @@ _kilo_session_pairs() {
   # "undefined is not an object (evaluating 'L.time.updated')"; omit --all.
   raw="$(_kilo_cached sessions kilo session list --format json)"
   [[ -n $raw ]] || return 1
+  # Sort by most-recently-updated first. Session data returned by `kilo
+  # session list` already appears to be pre-sorted this way, but we sort
+  # explicitly rather than relying on that undocumented ordering.
   if (( $+commands[jq] )); then
-    print -r -- "$raw" | jq -r '.[] | "\(.id):\(.title // .id)"' 2>/dev/null
+    print -r -- "$raw" | jq -r \
+      'sort_by(.updated // 0) | reverse | .[] | "\(.id):\(.title // .id)"' 2>/dev/null
   else
-    print -r -- "$raw" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
-      | sed -E 's/.*"([^"]*)"$/\1:\1/'
+    # No jq: extract "updated<TAB>id<TAB>title" per session (relies on kilo's
+    # pretty-printed JSON emitting id/title before updated within an object),
+    # sort numerically by updated (descending), then emit "id:title" pairs.
+    print -r -- "$raw" | awk -F'"' '
+      /"id"[[:space:]]*:/     { id = $4 }
+      /"title"[[:space:]]*:/  { title = $4 }
+      /"updated"[[:space:]]*:/ {
+        u = $0
+        gsub(/[^0-9]/, "", u)
+        if (id != "") {
+          printf "%s\t%s\t%s\n", u, id, (title != "" ? title : id)
+        }
+        id = ""; title = ""
+      }
+    ' | sort -t $'\t' -k1,1nr | awk -F'\t' '{ print $2 ":" $3 }'
   fi
 }
 
