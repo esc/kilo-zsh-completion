@@ -1,16 +1,83 @@
 #compdef kilo
-# -----------------------------------------------------------------------------
-# Native zsh completion for the `kilo` CLI (https://kilo.ai).
+#description:kilo AI coding agent CLI
+#
+# ZSH Completion for kilo (https://kilo.ai)
+#
+# Author: Emergency Self-Construct
+# Licence: MIT (https://opensource.org/license/MIT)
+# Version: 0.1 (unreleased)
+# Homepage: https://github.com/esc/kilo-zsh-completion
 #
 # Hand-written against the CLI reference at:
-#   https://kilo.ai/docs/code-with-ai/platforms/cli-reference
-# Regenerate/diff against `kilo help --all --format md` when the CLI changes.
 #
-# Dynamic values (models, agents, session ids) are looked up by running kilo
-# and cached under ${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion. Tune with:
-#   zstyle ':completion:*:*:kilo:*' cache-ttl 3600   # seconds, default 3600
-#   zstyle ':completion:*:*:kilo:*' dynamic false    # disable dynamic lookups
-# -----------------------------------------------------------------------------
+#     https://kilo.ai/docs/code-with-ai/platforms/cli-reference
+#
+# Regenerate/diff against `kilo help --all --format md` whenever the CLI
+# changes, since this completion does not parse kilo's own help output.
+#
+# To use this completion, install it somewhere on your hard drive:
+#
+#     $ git clone https://github.com/esc/kilo-zsh-completion
+#
+# And then add it to your $fpath in ~/.zshrc before you call compinit:
+#
+#     fpath+=/path/to/where/you/installed/kilo-zsh-completion
+#     autoload -Uz compinit && compinit
+#
+# If you're using oh-my-zsh or Prezto, they will call compinit for you, so
+# just add it to your $fpath before calling the OMZ or Prezto initialization
+# functions.
+#
+# Dynamic completion
+# -------------------
+#
+# Some values (models for --model, agents for --agent, session ids for
+# --session/session delete/export/cloud *) are looked up by actually running
+# `kilo` and caching the result, since kilo has no offline way to list them.
+# The cache lives under:
+#
+#     ${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion/
+#
+# Session ids are sorted with the most recently updated session first.
+#
+# To tune the cache lifetime (in seconds, default 3600), add to '.zshrc':
+#
+#    zstyle ':completion:*:*:kilo:*' cache-ttl 3600
+#
+# To disable dynamic (kilo-invoking) completion entirely and only ever fall
+# back to a plain message for those fields, add to '.zshrc':
+#
+#    zstyle ':completion:*:*:kilo:*' dynamic false
+#
+# To forcefully clean the completion cache:
+#
+#    $ rm -r ~/.cache/kilo-completion
+#
+# When developing, you can use the following to reload the completion after
+# having modified it:
+#
+#    $ unfunction _kilo && autoload -Uz _kilo
+#
+# Please report any issues at:
+# https://github.com/esc/kilo-zsh-completion/issues
+#
+# CHANGELOG
+# ---------
+#
+# * v0.1 (unreleased)
+#
+#   * Full coverage of the documented `kilo` CLI surface (subcommands,
+#     flags, choice lists, nested subcommands).
+#   * Cached dynamic completion for models, agents, and sessions.
+#   * Session completions sorted by recency (most recently updated first).
+#   * This self-documenting header.
+#
+# TODO
+# ----
+#
+# * Dynamic completion for MCP server names (currently a plain message).
+# * Consider a background/async cache refresh instead of a synchronous,
+#   `timeout`-guarded call on cache miss.
 
 # ---- cache helpers ----------------------------------------------------------
 
