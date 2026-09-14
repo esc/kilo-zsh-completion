@@ -189,9 +189,11 @@ _kilo_agents() {
 
 _kilo_session_pairs() {
   local raw
-  # Note: `--all --format json` currently crashes in kilo (7.4.23) with
-  # "undefined is not an object (evaluating 'L.time.updated')"; omit --all.
-  raw="$(_kilo_cached sessions kilo session list --format json)"
+  # Note: `--all --format json` used to crash in kilo (7.4.23) with
+  # "undefined is not an object (evaluating 'L.time.updated')"; fixed in
+  # 7.5.16. --all is used deliberately so --session/session delete/export
+  # can complete sessions across all projects, not just the current one.
+  raw="$(_kilo_cached sessions kilo session list --all --format json)"
   [[ -n $raw ]] || return 1
   # Sort by most-recently-updated first. Session data returned by `kilo
   # session list` already appears to be pre-sorted this way, but we sort
