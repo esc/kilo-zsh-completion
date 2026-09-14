@@ -40,7 +40,21 @@
 #
 #     ${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion/
 #
-# Session ids are sorted with the most recently updated session first.
+# Session ids are sorted with the most recently updated session first, and
+# the display shows the title with a shortened id in parens -- e.g. "Fix
+# the thing  (ses_fcc9d3e...)" -- while the value actually inserted is
+# always the full, real session id.
+#
+# If $PWD is (or is inside) a directory that has sessions of its own, session
+# completion is scoped to just that directory's sessions, mirroring how
+# `kilo session list` (without --all) scopes to the current project. If not
+# (e.g. a brand new directory with no sessions yet), every session is listed
+# instead, grouped by directory, with menu-select enabled so the combined
+# list is easy to navigate with the arrow keys. Menu-select is on by default
+# for all of kilo's completions (not just sessions) unless you've already
+# set your own `menu` style for kilo; override with:
+#
+#    zstyle ':completion::complete:kilo:*' menu <your-preference>
 #
 # To tune the cache lifetime (in seconds, default 3600), add to '.zshrc':
 #
@@ -195,51 +209,105 @@ _kilo_session_pairs() {
   # can complete sessions across all projects, not just the current one.
   raw="$(_kilo_cached sessions kilo session list --all --format json)"
   [[ -n $raw ]] || return 1
-  # Emit "id<TAB>title" pairs, sorted by most-recently-updated first. Session
-  # data returned by `kilo session list` already appears to be pre-sorted
-  # this way, but we sort explicitly rather than relying on that undocumented
-  # ordering. Tab-separated (rather than colon-joined) so a colon in a title
-  # can't be mistaken for the id/title separator.
+  # Emit "id<TAB>directory<TAB>title" tuples, sorted by most-recently-updated
+  # first. Session data returned by `kilo session list` already appears to
+  # be pre-sorted this way, but we sort explicitly rather than relying on
+  # that undocumented ordering. Tab-separated (rather than colon-joined) so
+  # a colon in a title can't be mistaken for a field separator.
   if (( $+commands[jq] )); then
     print -r -- "$raw" | jq -r \
-      'sort_by(.updated // 0) | reverse | .[] | "\(.id)\t\(.title // .id)"' 2>/dev/null
+      'sort_by(.updated // 0) | reverse | .[] | "\(.id)\t\(.directory // "")\t\(.title // .id)"' 2>/dev/null
   else
-    # No jq: extract "updated<TAB>id<TAB>title" per session (relies on kilo's
-    # pretty-printed JSON emitting id/title before updated within an object),
-    # sort numerically by updated (descending), then drop the updated column.
+    # No jq: extract "updated<TAB>id<TAB>directory<TAB>title" per session
+    # (relies on kilo's pretty-printed JSON emitting id/title/updated before
+    # directory within an object), sort numerically by updated (descending),
+    # then drop the updated column.
     print -r -- "$raw" | awk -F'"' '
-      /"id"[[:space:]]*:/     { id = $4 }
-      /"title"[[:space:]]*:/  { title = $4 }
-      /"updated"[[:space:]]*:/ {
-        u = $0
-        gsub(/[^0-9]/, "", u)
+      /"id"[[:space:]]*:/        { id = $4 }
+      /"title"[[:space:]]*:/     { title = $4 }
+      /"updated"[[:space:]]*:/   { u = $0; gsub(/[^0-9]/, "", u) }
+      /"directory"[[:space:]]*:/ {
+        dir = $4
         if (id != "") {
-          printf "%s\t%s\t%s\n", u, id, (title != "" ? title : id)
+          printf "%s\t%s\t%s\t%s\n", u, id, dir, (title != "" ? title : id)
         }
-        id = ""; title = ""
+        id = ""; title = ""; dir = ""
       }
     ' | sort -t $'\t' -k1,1nr | cut -f2-
   fi
 }
 
-_kilo_sessions() {
-  local -a ids displays
-  local id title short
-  while IFS=$'\t' read -r id title; do
-    [[ -n $id ]] || continue
-    short=${id#ses_}
+# _kilo_session_group <tag> <label> <ids-array-name> <titles-array-name>
+# Adds one compadd group of session completions: display is "title  (ses_
+# shortid...)", but the inserted value is always the full, real session id.
+_kilo_session_group() {
+  local tag=$1 label=$2
+  local -a ids titles displays
+  ids=("${(@P)3}")
+  titles=("${(@P)4}")
+  (( ${#ids} )) || return 1
+  local i short
+  for (( i = 1; i <= ${#ids}; i++ )); do
+    short=${ids[i]#ses_}
     short=${short[1,7]}
+    displays+=("${titles[i]:-${ids[i]}}  (ses_${short}...)")
+  done
+  compadd -J "$tag" -V "$tag" -X "$label" -d displays -a ids
+}
+
+_kilo_sessions() {
+  local -a ids dirs titles
+  local id dir title
+  while IFS=$'\t' read -r id dir title; do
+    [[ -n $id ]] || continue
     ids+=("$id")
-    displays+=("${title:-$id}  (ses_${short}...)")
+    dirs+=("$dir")
+    titles+=("$title")
   done < <(_kilo_session_pairs)
-  if (( ${#ids} )); then
-    # -V groups as tag "kilo-sessions" without sorting, preserving the
-    # recency order from _kilo_session_pairs. -d supplies the display
-    # strings (title + shortened id) shown in the menu, while the actual
-    # inserted value (-a ids) stays the full, real session id.
-    compadd -V kilo-sessions -d displays -a ids
-  else
+  if (( ! ${#ids} )); then
     _message 'session id'
+    return
+  fi
+
+  # If $PWD is (or is inside) a directory that has sessions of its own,
+  # scope the completion to just that directory's sessions -- mirroring how
+  # `kilo session list` (without --all) scopes to the current project.
+  # Otherwise (e.g. a fresh directory with no sessions yet), fall back to
+  # browsing every session, grouped by directory, with menu selection so
+  # the (potentially long) combined list is easy to navigate.
+  local -a uniq_dirs
+  uniq_dirs=(${(u)dirs:#})
+  local d here_dir=
+  for d in $uniq_dirs; do
+    [[ -n $d ]] || continue
+    if [[ $PWD == $d || $PWD == $d/* ]]; then
+      (( ${#d} > ${#here_dir} )) && here_dir=$d
+    fi
+  done
+
+  if [[ -n $here_dir ]]; then
+    local -a sel_ids sel_titles
+    local i
+    for (( i = 1; i <= ${#ids}; i++ )); do
+      [[ ${dirs[i]} == $here_dir ]] || continue
+      sel_ids+=("${ids[i]}")
+      sel_titles+=("${titles[i]}")
+    done
+    _kilo_session_group kilo-sessions "$here_dir" sel_ids sel_titles
+  else
+    local -a group_ids group_titles
+    local i tag
+    for d in $uniq_dirs; do
+      [[ -n $d ]] || continue
+      group_ids=(); group_titles=()
+      for (( i = 1; i <= ${#ids}; i++ )); do
+        [[ ${dirs[i]} == $d ]] || continue
+        group_ids+=("${ids[i]}")
+        group_titles+=("${titles[i]}")
+      done
+      tag="kilo-sessions-${d//[^A-Za-z0-9]/-}"
+      _kilo_session_group "$tag" "$d" group_ids group_titles
+    done
   fi
 }
 
@@ -997,6 +1065,16 @@ _kilo_config() {
 
 local curcontext="$curcontext" state line
 typeset -A opt_args
+
+# Default to menu-select (arrow-key navigable, highlighted matches) for all
+# of kilo's own completions, unless the user already configured a `menu`
+# style for kilo themselves. This has to happen before _arguments runs,
+# since the style is looked up and cached before any nested action function
+# (e.g. _kilo_sessions) gets a chance to set it. Override in your own
+# .zshrc with:
+#   zstyle ':completion::complete:kilo:*' menu <your-preference>
+zstyle -m ':completion::complete:kilo:*' menu '*' ||
+  zstyle ':completion::complete:kilo:*' menu yes select
 
 local -a _kilo_hv
 _kilo_hv=(
