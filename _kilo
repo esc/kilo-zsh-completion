@@ -80,6 +80,17 @@
 # CHANGELOG
 # ---------
 #
+# * v0.2 (unreleased)
+#
+#   * Restore --all for session completion now that the kilo (7.5.16) crash
+#     it used to trigger is fixed; session ids/titles are pooled across all
+#     directories again.
+#   * Session completion menu now shows the title first, with a shortened
+#     session id in parens; the value actually inserted stays the full id.
+#   * Session completion scopes to the current directory's own sessions
+#     when there are any; otherwise every session is listed, grouped by
+#     directory, with menu-select enabled by default for kilo completions.
+#
 # * v0.1
 #
 #   * Full coverage of the documented `kilo` CLI surface (subcommands,
