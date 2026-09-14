@@ -45,14 +45,17 @@
 # the thing  (ses_fcc9d3e...)" -- while the value actually inserted is
 # always the full, real session id.
 #
-# If $PWD is (or is inside) a directory that has sessions of its own, session
-# completion is scoped to just that directory's sessions, mirroring how
-# `kilo session list` (without --all) scopes to the current project. If not
-# (e.g. a brand new directory with no sessions yet), every session is listed
-# instead, grouped by directory, with menu-select enabled so the combined
-# list is easy to navigate with the arrow keys. Menu-select is on by default
-# for all of kilo's completions (not just sessions) unless you've already
-# set your own `menu` style for kilo; override with:
+# If $PWD is (or is inside) a directory that has sessions belonging to a
+# real (non-"global") kilo project, session completion is scoped to just
+# that project's sessions, mirroring how `kilo session list` (without
+# --all) scopes to the current project. Sessions in kilo's "global" bucket
+# (started outside any registered project) don't count for this: their
+# directory field is just wherever kilo happened to run (possibly $HOME
+# itself). Everywhere else, every session is listed one per line, grouped
+# by directory, with menu-select enabled so the combined list is easy to
+# navigate with the arrow keys. Menu-select is on by default for all of
+# kilo's completions (not just sessions) unless you've already set your own
+# `menu` style for kilo; override with:
 #
 #    zstyle ':completion::complete:kilo:*' menu <your-preference>
 #
@@ -87,9 +90,10 @@
 #     directories again.
 #   * Session completion menu now shows the title first, with a shortened
 #     session id in parens; the value actually inserted stays the full id.
-#   * Session completion scopes to the current directory's own sessions
-#     when there are any; otherwise every session is listed, grouped by
-#     directory, with menu-select enabled by default for kilo completions.
+#   * Session completion scopes to the current directory's own sessions when
+#     they belong to a real (non-"global") project; otherwise every session
+#     is listed one per line, grouped by directory, with menu-select enabled
+#     by default for kilo completions.
 #
 # * v0.1
 #
@@ -220,29 +224,33 @@ _kilo_session_pairs() {
   # can complete sessions across all projects, not just the current one.
   raw="$(_kilo_cached sessions kilo session list --all --format json)"
   [[ -n $raw ]] || return 1
-  # Emit "id<TAB>directory<TAB>title" tuples, sorted by most-recently-updated
-  # first. Session data returned by `kilo session list` already appears to
-  # be pre-sorted this way, but we sort explicitly rather than relying on
-  # that undocumented ordering. Tab-separated (rather than colon-joined) so
-  # a colon in a title can't be mistaken for a field separator.
+  # Emit "id<TAB>directory<TAB>projectId<TAB>title" tuples, sorted by
+  # most-recently-updated first. Session data returned by `kilo session list`
+  # already appears to be pre-sorted this way, but we sort explicitly rather
+  # than relying on that undocumented ordering. Tab-separated (rather than
+  # colon-joined) so a colon in a title can't be mistaken for a field
+  # separator. The projectId is needed to distinguish "global" sessions
+  # (kilo's catch-all bucket for sessions started outside any registered
+  # project) from sessions belonging to a real project.
   if (( $+commands[jq] )); then
     print -r -- "$raw" | jq -r \
-      'sort_by(.updated // 0) | reverse | .[] | "\(.id)\t\(.directory // "")\t\(.title // .id)"' 2>/dev/null
+      'sort_by(.updated // 0) | reverse | .[] | "\(.id)\t\(.directory // "")\t\(.projectId // "")\t\(.title // .id)"' 2>/dev/null
   else
-    # No jq: extract "updated<TAB>id<TAB>directory<TAB>title" per session
-    # (relies on kilo's pretty-printed JSON emitting id/title/updated before
-    # directory within an object), sort numerically by updated (descending),
-    # then drop the updated column.
+    # No jq: extract "updated<TAB>id<TAB>directory<TAB>projectId<TAB>title"
+    # per session (relies on kilo's pretty-printed JSON emitting
+    # id/title/updated/projectId before directory within an object), sort
+    # numerically by updated (descending), then drop the updated column.
     print -r -- "$raw" | awk -F'"' '
       /"id"[[:space:]]*:/        { id = $4 }
       /"title"[[:space:]]*:/     { title = $4 }
       /"updated"[[:space:]]*:/   { u = $0; gsub(/[^0-9]/, "", u) }
+      /"projectId"[[:space:]]*:/ { pid = $4 }
       /"directory"[[:space:]]*:/ {
         dir = $4
         if (id != "") {
-          printf "%s\t%s\t%s\t%s\n", u, id, dir, (title != "" ? title : id)
+          printf "%s\t%s\t%s\t%s\t%s\n", u, id, dir, pid, (title != "" ? title : id)
         }
-        id = ""; title = ""; dir = ""
+        id = ""; title = ""; dir = ""; pid = ""
       }
     ' | sort -t $'\t' -k1,1nr | cut -f2-
   fi
@@ -251,6 +259,7 @@ _kilo_session_pairs() {
 # _kilo_session_group <tag> <label> <ids-array-name> <titles-array-name>
 # Adds one compadd group of session completions: display is "title  (ses_
 # shortid...)", but the inserted value is always the full, real session id.
+# -l lists the matches one per line instead of packing several per row.
 _kilo_session_group() {
   local tag=$1 label=$2
   local -a ids titles displays
@@ -263,16 +272,17 @@ _kilo_session_group() {
     short=${short[1,7]}
     displays+=("${titles[i]:-${ids[i]}}  (ses_${short}...)")
   done
-  compadd -J "$tag" -V "$tag" -X "$label" -d displays -a ids
+  compadd -l -J "$tag" -V "$tag" -X "$label" -d displays -a ids
 }
 
 _kilo_sessions() {
-  local -a ids dirs titles
-  local id dir title
-  while IFS=$'\t' read -r id dir title; do
+  local -a ids dirs pids titles
+  local id dir pid title
+  while IFS=$'\t' read -r id dir pid title; do
     [[ -n $id ]] || continue
     ids+=("$id")
     dirs+=("$dir")
+    pids+=("$pid")
     titles+=("$title")
   done < <(_kilo_session_pairs)
   if (( ! ${#ids} )); then
@@ -280,16 +290,25 @@ _kilo_sessions() {
     return
   fi
 
-  # If $PWD is (or is inside) a directory that has sessions of its own,
-  # scope the completion to just that directory's sessions -- mirroring how
-  # `kilo session list` (without --all) scopes to the current project.
-  # Otherwise (e.g. a fresh directory with no sessions yet), fall back to
-  # browsing every session, grouped by directory, with menu selection so
-  # the (potentially long) combined list is easy to navigate.
-  local -a uniq_dirs
+  # If $PWD is (or is inside) a directory that has sessions belonging to a
+  # real (non-"global") project, scope the completion to just that
+  # directory's sessions -- mirroring how `kilo session list` (without
+  # --all) scopes to the current project. Sessions in kilo's "global" bucket
+  # (started outside any registered project) are NOT a scoping candidate:
+  # their directory field is just wherever kilo happened to run (e.g. $HOME
+  # itself), so scoping on it would wrongly hide everything else when
+  # completing from such a directory. Otherwise, fall back to browsing
+  # every session, grouped by directory.
+  local -a uniq_dirs project_dirs
   uniq_dirs=(${(u)dirs:#})
+  local i
+  for (( i = 1; i <= ${#ids}; i++ )); do
+    [[ ${pids[i]} == global ]] && continue
+    project_dirs+=("${dirs[i]}")
+  done
+  project_dirs=(${(u)project_dirs:#})
   local d here_dir=
-  for d in $uniq_dirs; do
+  for d in $project_dirs; do
     [[ -n $d ]] || continue
     if [[ $PWD == $d || $PWD == $d/* ]]; then
       (( ${#d} > ${#here_dir} )) && here_dir=$d
