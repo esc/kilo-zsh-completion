@@ -195,16 +195,18 @@ _kilo_session_pairs() {
   # can complete sessions across all projects, not just the current one.
   raw="$(_kilo_cached sessions kilo session list --all --format json)"
   [[ -n $raw ]] || return 1
-  # Sort by most-recently-updated first. Session data returned by `kilo
-  # session list` already appears to be pre-sorted this way, but we sort
-  # explicitly rather than relying on that undocumented ordering.
+  # Emit "id<TAB>title" pairs, sorted by most-recently-updated first. Session
+  # data returned by `kilo session list` already appears to be pre-sorted
+  # this way, but we sort explicitly rather than relying on that undocumented
+  # ordering. Tab-separated (rather than colon-joined) so a colon in a title
+  # can't be mistaken for the id/title separator.
   if (( $+commands[jq] )); then
     print -r -- "$raw" | jq -r \
-      'sort_by(.updated // 0) | reverse | .[] | "\(.id):\(.title // .id)"' 2>/dev/null
+      'sort_by(.updated // 0) | reverse | .[] | "\(.id)\t\(.title // .id)"' 2>/dev/null
   else
     # No jq: extract "updated<TAB>id<TAB>title" per session (relies on kilo's
     # pretty-printed JSON emitting id/title before updated within an object),
-    # sort numerically by updated (descending), then emit "id:title" pairs.
+    # sort numerically by updated (descending), then drop the updated column.
     print -r -- "$raw" | awk -F'"' '
       /"id"[[:space:]]*:/     { id = $4 }
       /"title"[[:space:]]*:/  { title = $4 }
@@ -216,15 +218,26 @@ _kilo_session_pairs() {
         }
         id = ""; title = ""
       }
-    ' | sort -t $'\t' -k1,1nr | awk -F'\t' '{ print $2 ":" $3 }'
+    ' | sort -t $'\t' -k1,1nr | cut -f2-
   fi
 }
 
 _kilo_sessions() {
-  local -a pairs
-  pairs=(${(f)"$(_kilo_session_pairs)"})
-  if (( ${#pairs} )); then
-    _describe -t kilo-sessions 'session' pairs
+  local -a ids displays
+  local id title short
+  while IFS=$'\t' read -r id title; do
+    [[ -n $id ]] || continue
+    short=${id#ses_}
+    short=${short[1,7]}
+    ids+=("$id")
+    displays+=("${title:-$id}  (ses_${short}...)")
+  done < <(_kilo_session_pairs)
+  if (( ${#ids} )); then
+    # -V groups as tag "kilo-sessions" without sorting, preserving the
+    # recency order from _kilo_session_pairs. -d supplies the display
+    # strings (title + shortened id) shown in the menu, while the actual
+    # inserted value (-a ids) stays the full, real session id.
+    compadd -V kilo-sessions -d displays -a ids
   else
     _message 'session id'
   fi
