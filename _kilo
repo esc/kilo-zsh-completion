@@ -41,7 +41,7 @@
 #     ${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion/
 #
 # Sessions are listed with the most recently updated session first, one per
-# line, as a table of padded/truncated titles with a shortened id on the
+# line, as a table of fixed-width (40-char) titles with a shortened id on the
 # right -- e.g. "Fix the thing                    ses_fcc9d3e..." -- while
 # the value actually inserted is always the full, real session id.
 #
@@ -101,8 +101,8 @@
 #     is listed, grouped by directory, with menu-select enabled by default
 #     for kilo completions.
 #   * Session listing is now one session per line, as an aligned table of
-#     titles (padded, truncated at 60 chars) plus shortened ids, with
-#     colored directory group headers (zstyle session-group-color).
+#     titles (fixed 40-char column, longer titles truncated) plus shortened
+#     ids, with colored directory group headers (zstyle session-group-color).
 #   * Fix a display corruption where a spurious "i=N" (a loop counter) was
 #     briefly drawn into the command line during session completion; the
 #     group-building code is now inlined in _kilo_sessions instead of a
@@ -335,25 +335,22 @@ _kilo_sessions() {
   fi
 
   local t short tag
-  local -a gids gtitles gdisplays
-  local maxw
+  local -a gids gdisplays
   for d in $emit_dirs; do
     [[ -n $d ]] || continue
-    gids=(); gtitles=(); gdisplays=(); maxw=0
+    gids=(); gdisplays=()
     for (( i = 1; i <= ${#ids}; i++ )); do
       [[ ${dirs[i]} == $d ]] || continue
       gids+=("${ids[i]}")
       t="${titles[i]:-${ids[i]}}"
-      (( ${#t} > 60 )) && t="${t[1,57]}..."
-      (( ${#t} > maxw )) && maxw=${#t}
-      gtitles+=("$t")
+      # Fixed-width title column (40 chars) so the id column lines up
+      # uniformly across directory groups, not just within one group.
+      (( ${#t} > 40 )) && t="${t[1,37]}..."
+      short="${ids[i]#ses_}"
+      short="${short[1,7]}"
+      gdisplays+=("${(r:40:)t}  ses_${short}...")
     done
     (( ${#gids} )) || continue
-    for (( i = 1; i <= ${#gids}; i++ )); do
-      short="${gids[i]#ses_}"
-      short="${short[1,7]}"
-      gdisplays+=("${(r:$maxw:)gtitles[i]}  ses_${short}...")
-    done
     tag="kilo-sessions-${d//[^A-Za-z0-9]/-}"
     # -o nosort keeps the recency order from _kilo_session_pairs; without it
     # the listing gets sorted by display string (and menu-select would
