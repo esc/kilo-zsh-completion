@@ -103,10 +103,6 @@
 #   * Session listing is now one session per line, as an aligned table of
 #     titles (fixed 40-char column, longer titles truncated) plus shortened
 #     ids, with colored directory group headers (zstyle session-group-color).
-#   * Fix a display corruption where a spurious "i=N" (a loop counter) was
-#     briefly drawn into the command line during session completion; the
-#     group-building code is now inlined in _kilo_sessions instead of a
-#     helper using ${(@P)} indirection, which triggered the artifact.
 #   * Keep session listing in recency order (compadd -o nosort) so
 #     menu-select's auto-insert picks the most recent session, not the
 #     alphabetically first.
