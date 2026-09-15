@@ -91,9 +91,8 @@
 #
 # * v0.2 (unreleased)
 #
-#   * Restore --all for session completion now that the kilo (7.5.16) crash
-#     it used to trigger is fixed; session ids/titles are pooled across all
-#     directories again.
+#   * Restore --all for session completion now that this has been fixed in
+#     kilo (7.5.16).
 #   * Session completion scopes to the current directory's own sessions when
 #     they belong to a real (non-"global") project; otherwise every session
 #     is listed, grouped by directory, with menu-select enabled by default
@@ -101,11 +100,9 @@
 #   * Sessions are displayed one per line as an aligned table: the title
 #     first (fixed 40-char column, longer titles truncated), then the
 #     shortened session id; directory group headers are colored
-#     (zstyle session-group-color). The value actually inserted always stays
-#     the full session id.
-#   * Keep session listing in recency order (compadd -o nosort) so
-#     menu-select's auto-insert picks the most recent session, not the
-#     alphabetically first.
+#     (zstyle session-group-color). The value actually inserted is always the
+#     full session id.
+#   * Keep session listing in order of recency
 #
 # * v0.1
 #
