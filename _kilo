@@ -40,10 +40,10 @@
 #
 #     ${XDG_CACHE_HOME:-$HOME/.cache}/kilo-completion/
 #
-# Session ids are sorted with the most recently updated session first, and
-# the display shows the title with a shortened id in parens -- e.g. "Fix
-# the thing  (ses_fcc9d3e...)" -- while the value actually inserted is
-# always the full, real session id.
+# Sessions are listed with the most recently updated session first, one per
+# line, as a table of padded/truncated titles with a shortened id on the
+# right -- e.g. "Fix the thing                    (ses_fcc9d3e...)" -- while
+# the value actually inserted is always the full, real session id.
 #
 # If $PWD is (or is inside) a directory that has sessions belonging to a
 # real (non-"global") kilo project, session completion is scoped to just
@@ -51,13 +51,19 @@
 # --all) scopes to the current project. Sessions in kilo's "global" bucket
 # (started outside any registered project) don't count for this: their
 # directory field is just wherever kilo happened to run (possibly $HOME
-# itself). Everywhere else, every session is listed one per line, grouped
-# by directory, with menu-select enabled so the combined list is easy to
-# navigate with the arrow keys. Menu-select is on by default for all of
-# kilo's completions (not just sessions) unless you've already set your own
-# `menu` style for kilo; override with:
+# itself). Everywhere else, every session is listed, grouped by directory
+# under a colored header, with menu-select enabled so the combined list is
+# easy to navigate with the arrow keys. Menu-select is on by default for
+# all of kilo's completions (not just sessions) unless you've already set
+# your own `menu` style for kilo; override with:
 #
 #    zstyle ':completion::complete:kilo:*' menu <your-preference>
+#
+# Group header color: bold cyan by default. Override with any SGR spec or
+# set to the empty string to disable, e.g.:
+#
+#    zstyle ':completion:*:*:kilo:*' session-group-color '34'
+#    zstyle ':completion:*:*:kilo:*' session-group-color ''
 #
 # To tune the cache lifetime (in seconds, default 3600), add to '.zshrc':
 #
@@ -92,8 +98,18 @@
 #     session id in parens; the value actually inserted stays the full id.
 #   * Session completion scopes to the current directory's own sessions when
 #     they belong to a real (non-"global") project; otherwise every session
-#     is listed one per line, grouped by directory, with menu-select enabled
-#     by default for kilo completions.
+#     is listed, grouped by directory, with menu-select enabled by default
+#     for kilo completions.
+#   * Session listing is now one session per line, as an aligned table of
+#     titles (padded, truncated at 60 chars) plus shortened ids, with
+#     colored directory group headers (zstyle session-group-color).
+#   * Fix a display corruption where a spurious "i=N" (a loop counter) was
+#     briefly drawn into the command line during session completion; the
+#     group-building code is now inlined in _kilo_sessions instead of a
+#     helper using ${(@P)} indirection, which triggered the artifact.
+#   * Keep session listing in recency order (compadd -o nosort) so
+#     menu-select's auto-insert picks the most recent session, not the
+#     alphabetically first.
 #
 # * v0.1
 #
@@ -256,25 +272,6 @@ _kilo_session_pairs() {
   fi
 }
 
-# _kilo_session_group <tag> <label> <ids-array-name> <titles-array-name>
-# Adds one compadd group of session completions: display is "title  (ses_
-# shortid...)", but the inserted value is always the full, real session id.
-# -l lists the matches one per line instead of packing several per row.
-_kilo_session_group() {
-  local tag=$1 label=$2
-  local -a ids titles displays
-  ids=("${(@P)3}")
-  titles=("${(@P)4}")
-  (( ${#ids} )) || return 1
-  local i short
-  for (( i = 1; i <= ${#ids}; i++ )); do
-    short=${ids[i]#ses_}
-    short=${short[1,7]}
-    displays+=("${titles[i]:-${ids[i]}}  (ses_${short}...)")
-  done
-  compadd -l -J "$tag" -V "$tag" -X "$label" -d displays -a ids
-}
-
 _kilo_sessions() {
   local -a ids dirs pids titles
   local id dir pid title
@@ -299,8 +296,7 @@ _kilo_sessions() {
   # itself), so scoping on it would wrongly hide everything else when
   # completing from such a directory. Otherwise, fall back to browsing
   # every session, grouped by directory.
-  local -a uniq_dirs project_dirs
-  uniq_dirs=(${(u)dirs:#})
+  local -a project_dirs
   local i
   for (( i = 1; i <= ${#ids}; i++ )); do
     [[ ${pids[i]} == global ]] && continue
@@ -315,30 +311,55 @@ _kilo_sessions() {
     fi
   done
 
+  # Emit one compadd group per directory. Everything below is deliberately
+  # kept inline in this function: when this code lived in a helper function
+  # (receiving the data via ${(@P)} indirection), the interactive listing
+  # was corrupted by a spurious "i=N" string (N = a loop counter) being
+  # drawn into the command line. The same constructs inline do not leak.
+  local -a emit_dirs
   if [[ -n $here_dir ]]; then
-    local -a sel_ids sel_titles
-    local i
-    for (( i = 1; i <= ${#ids}; i++ )); do
-      [[ ${dirs[i]} == $here_dir ]] || continue
-      sel_ids+=("${ids[i]}")
-      sel_titles+=("${titles[i]}")
-    done
-    _kilo_session_group kilo-sessions "$here_dir" sel_ids sel_titles
+    emit_dirs=("$here_dir")
   else
-    local -a group_ids group_titles
-    local i tag
-    for d in $uniq_dirs; do
-      [[ -n $d ]] || continue
-      group_ids=(); group_titles=()
-      for (( i = 1; i <= ${#ids}; i++ )); do
-        [[ ${dirs[i]} == $d ]] || continue
-        group_ids+=("${ids[i]}")
-        group_titles+=("${titles[i]}")
-      done
-      tag="kilo-sessions-${d//[^A-Za-z0-9]/-}"
-      _kilo_session_group "$tag" "$d" group_ids group_titles
-    done
+    emit_dirs=(${(u)dirs:#})
   fi
+
+  # Group header color: bold cyan by default. Override with an SGR spec:
+  #   zstyle ':completion:*:*:kilo:*' session-group-color '34'
+  # Set to the empty string to disable coloring. Note: zstyle -s clobbers
+  # the variable even when the style is unset, hence the || fallback.
+  local color cstart='' cend=''
+  zstyle -s ':completion:*:*:kilo:*' session-group-color color || color='01;36'
+  if [[ -n $color ]]; then
+    cstart=$'\e['"${color}"$'m'
+    cend=$'\e[0m'
+  fi
+
+  local t short tag
+  local -a gids gtitles gdisplays
+  local maxw
+  for d in $emit_dirs; do
+    [[ -n $d ]] || continue
+    gids=(); gtitles=(); gdisplays=(); maxw=0
+    for (( i = 1; i <= ${#ids}; i++ )); do
+      [[ ${dirs[i]} == $d ]] || continue
+      gids+=("${ids[i]}")
+      t="${titles[i]:-${ids[i]}}"
+      (( ${#t} > 60 )) && t="${t[1,57]}..."
+      (( ${#t} > maxw )) && maxw=${#t}
+      gtitles+=("$t")
+    done
+    (( ${#gids} )) || continue
+    for (( i = 1; i <= ${#gids}; i++ )); do
+      short="${gids[i]#ses_}"
+      short="${short[1,7]}"
+      gdisplays+=("${(r:$maxw:)gtitles[i]}  (ses_${short}...)")
+    done
+    tag="kilo-sessions-${d//[^A-Za-z0-9]/-}"
+    # -o nosort keeps the recency order from _kilo_session_pairs; without it
+    # the listing gets sorted by display string (and menu-select would
+    # auto-insert the alphabetically-first instead of the most recent one).
+    compadd -l -o nosort -J "$tag" -V "$tag" -X "${cstart}${d}${cend}" -d gdisplays -a gids
+  done
 }
 
 # ---- top-level command list --------------------------------------------------
