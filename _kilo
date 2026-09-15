@@ -42,7 +42,7 @@
 #
 # Sessions are listed with the most recently updated session first, one per
 # line, as a table of padded/truncated titles with a shortened id on the
-# right -- e.g. "Fix the thing                    (ses_fcc9d3e...)" -- while
+# right -- e.g. "Fix the thing                    ses_fcc9d3e..." -- while
 # the value actually inserted is always the full, real session id.
 #
 # If $PWD is (or is inside) a directory that has sessions belonging to a
@@ -95,7 +95,7 @@
 #     it used to trigger is fixed; session ids/titles are pooled across all
 #     directories again.
 #   * Session completion menu now shows the title first, with a shortened
-#     session id in parens; the value actually inserted stays the full id.
+#     session id after it; the value actually inserted stays the full id.
 #   * Session completion scopes to the current directory's own sessions when
 #     they belong to a real (non-"global") project; otherwise every session
 #     is listed, grouped by directory, with menu-select enabled by default
@@ -352,7 +352,7 @@ _kilo_sessions() {
     for (( i = 1; i <= ${#gids}; i++ )); do
       short="${gids[i]#ses_}"
       short="${short[1,7]}"
-      gdisplays+=("${(r:$maxw:)gtitles[i]}  (ses_${short}...)")
+      gdisplays+=("${(r:$maxw:)gtitles[i]}  ses_${short}...")
     done
     tag="kilo-sessions-${d//[^A-Za-z0-9]/-}"
     # -o nosort keeps the recency order from _kilo_session_pairs; without it
