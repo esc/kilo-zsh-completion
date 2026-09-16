@@ -7,7 +7,7 @@
 # Assisted-by: Kilo (anthropic/claude-sonnet-5)
 # Assisted-by: Kilo (moonshotai/kimi-k3)
 # Licence: MIT (https://opensource.org/license/MIT)
-# Version: 0.2
+# Version: 0.3 (unreleased)
 # Homepage: https://github.com/esc/kilo-zsh-completion
 #
 # Hand-written against the CLI reference at:
@@ -88,6 +88,8 @@
 #
 # CHANGELOG
 # ---------
+#
+# * v0.3 (unreleased)
 #
 # * v0.2
 #
