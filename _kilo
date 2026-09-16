@@ -93,8 +93,11 @@
 #
 #   * Fix bogus --agent completions: `kilo agent list` output format changed
 #     (now prints a per-agent JSON config dump); parse only "name (mode)"
-#     lines. Raise the cache regeneration timeout (5s -> 15s) since that
-#     command now takes ~5s cold and was flakily killed.
+#     lines, and filter out kilo's internal utility agents (title, summary,
+#     compaction -- recognizable by their deny-everything permission block,
+#     since `agent list` doesn't expose their "hidden" flag). Raise the
+#     cache regeneration timeout (5s -> 15s) since that command now takes
+#     ~5s cold and was flakily killed.
 #
 # * v0.2
 #
@@ -225,9 +228,37 @@ _kilo_agent_list() {
   # `kilo agent list` prints each agent as "<name> (<mode>)" followed by an
   # indented multi-line JSON dump of its configuration. Only take lines of
   # exactly that shape; anything else (JSON tokens, the closing "]" lines)
-  # would otherwise be offered as bogus agent names. If kilo changes the
-  # format and nothing matches, we degrade to a plain message.
-  print -r -- "$raw" | awk '/^[[:alnum:]_.-]+ \((primary|subagent|all)\)/ {print $1}'
+  # would otherwise be offered as bogus agent names.
+  #
+  # Additionally, kilo's internal utility agents (title/summary/compaction,
+  # the ones `kilo debug agent` marks "hidden": true) are not valid choices
+  # for --agent. `agent list` does not expose the hidden flag, but those
+  # agents are recognizable: their entire permission dump is a single
+  # deny-everything rule {"permission": "*", "action": "deny", "pattern":
+  # "*"}. Filter those out.
+  print -r -- "$raw" | awk '
+    function flush() {
+      if (name != "" && !(nrules == 1 && denyall)) print name
+    }
+    /^[[:alnum:]_.-]+ \((primary|subagent|all)\)/ {
+      flush()
+      name = $1
+      nrules = 0
+      denyall = 1
+      next
+    }
+    /"permission"[[:space:]]*:/ {
+      nrules++
+      if ($0 !~ /"permission"[[:space:]]*:[[:space:]]*"\*"/) denyall = 0
+    }
+    /"action"[[:space:]]*:/ {
+      if ($0 !~ /"action"[[:space:]]*:[[:space:]]*"deny"/) denyall = 0
+    }
+    /"pattern"[[:space:]]*:/ {
+      if ($0 !~ /"pattern"[[:space:]]*:[[:space:]]*"\*"/) denyall = 0
+    }
+    END { flush() }
+  '
 }
 
 _kilo_agents() {
