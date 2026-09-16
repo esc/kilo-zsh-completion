@@ -91,6 +91,11 @@
 #
 # * v0.3 (unreleased)
 #
+#   * Fix bogus --agent completions: `kilo agent list` output format changed
+#     (now prints a per-agent JSON config dump); parse only "name (mode)"
+#     lines. Raise the cache regeneration timeout (5s -> 15s) since that
+#     command now takes ~5s cold and was flakily killed.
+#
 # * v0.2
 #
 #   * Restore --all for session completion now that this has been fixed in
@@ -166,8 +171,11 @@ _kilo_cached() {
   if (( ! fresh )) && _kilo_dynamic_enabled; then
     [[ -d $dir ]] || command mkdir -p -- "$dir" 2>/dev/null
     local out tmp="${file}.tmp.$$"
+    # 15s guard: kilo cold-starts can take ~5s (e.g. `kilo agent list`
+    # prints ~240KB of per-agent JSON config), so a tighter timeout here
+    # would flakily kill the command and leave the cache unpopulated.
     if (( $+commands[timeout] )); then
-      out="$(timeout 5 "$@" 2>/dev/null)"
+      out="$(timeout 15 "$@" 2>/dev/null)"
     else
       out="$("$@" 2>/dev/null)"
     fi
@@ -214,7 +222,12 @@ _kilo_agent_list() {
   local raw
   raw="$(_kilo_cached agents kilo agent list)"
   [[ -n $raw ]] || return 1
-  print -r -- "$raw" | awk 'NF && $1 !~ /^(NAME|Agent|---)/ {print $1}'
+  # `kilo agent list` prints each agent as "<name> (<mode>)" followed by an
+  # indented multi-line JSON dump of its configuration. Only take lines of
+  # exactly that shape; anything else (JSON tokens, the closing "]" lines)
+  # would otherwise be offered as bogus agent names. If kilo changes the
+  # format and nothing matches, we degrade to a plain message.
+  print -r -- "$raw" | awk '/^[[:alnum:]_.-]+ \((primary|subagent|all)\)/ {print $1}'
 }
 
 _kilo_agents() {
